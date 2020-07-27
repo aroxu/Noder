@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Noder</string>
+    <string name="test_node_runtime">Run!</string>
+</resources>
