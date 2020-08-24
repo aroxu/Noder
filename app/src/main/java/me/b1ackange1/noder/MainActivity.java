@@ -2,6 +2,12 @@ package me.b1ackange1.noder;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import android.annotation.SuppressLint;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.res.AssetManager;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.view.View;
@@ -9,76 +15,82 @@ import android.widget.Button;
 import android.widget.TextView;
 
 import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.URL;
 
 public class MainActivity extends AppCompatActivity {
-
-    // Used to load the 'native-lib' library on application startup.
-    static {
-        System.loadLibrary("native-lib");
-        System.loadLibrary("node");
-    }
-
-    //We just want one instance of node running in the background.
-    public static boolean _startedNodeAlready=false;
+    private static final String TAG = "MainActivity";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        if( !_startedNodeAlready ) {
-            _startedNodeAlready=true;
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    startNodeWithArguments(new String[]{"node", "-e",
-                            "const http = require('http'); " +
-                                    "const versions_server = http.createServer( (request, response) => { " +
-                                    "  response.end('Versions: ' + JSON.stringify(process.versions)); " +
-                                    "}); " +
-                                    "versions_server.listen(3000);"
-                    });
-                }
-            }).start();
-        }
-        final Button buttonVersions = (Button) findViewById(R.id.btVersions);
-        final TextView textViewVersions = (TextView) findViewById(R.id.tvVersions);
+        startBut = (Button) findViewById(R.id.but_start);
+        infoTv = (TextView) findViewById(R.id.tv_info);
 
-        buttonVersions.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
+        startBut.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
 
-                //Network operations should be done in the background.
-                new AsyncTask<Void,Void,String>() {
-                    @Override
-                    protected String doInBackground(Void... params) {
-                        String nodeResponse="";
-                        try {
-                            URL localNodeServer = new URL("http://localhost:3000/");
-                            BufferedReader in = new BufferedReader(
-                                    new InputStreamReader(localNodeServer.openStream()));
-                            String inputLine;
-                            while ((inputLine = in.readLine()) != null)
-                                nodeResponse=nodeResponse+inputLine;
-                            in.close();
-                        } catch (Exception ex) {
-                            nodeResponse=ex.toString();
-                        }
-                        return nodeResponse;
-                    }
-                    @Override
-                    protected void onPostExecute(String result) {
-                        textViewVersions.setText(result);
-                    }
-                }.execute();
+                Intent i = new Intent(MainActivity.this, StarterService.class);
+                if (!Utils.isServiceRunning(MainActivity.this, StarterService.class))
+                    startService(i);
+                else
+                    stopService(i);
             }
         });
     }
 
-    /**
-     * A native method that is implemented by the 'native-lib' native library,
-     * which is packaged with this application.
-     */
-    public native Object startNodeWithArguments(String[] arguments);
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        IntentFilter intentFilter = new IntentFilter(StarterService.BROADCAST_STARTED);
+        intentFilter.addAction(StarterService.BROADCAST_FINISHED);
+        registerReceiver(nodeStatusReceiver, intentFilter);
+        updateView();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        unregisterReceiver(nodeStatusReceiver);
+    }
+
+    private BroadcastReceiver nodeStatusReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            final String action = intent.getAction();
+            if ( action.equals(StarterService.BROADCAST_FINISHED) ||
+                    action.equals(StarterService.BROADCAST_STARTED) ) {
+                updateView();
+            }
+        }
+    };
+
+    private void updateView() {
+        if (Utils.isServiceRunning(this, StarterService.class)) {
+            startBut.setText(R.string.but_stop);
+            // Try to guess the ip of the device on local network
+            String ip = Utils.getIP();
+            if (ip != null) {
+                infoTv.setText(getString(R.string.address_info)  + ip.replace("/", "") + ":" + StarterService.PORT);
+            }
+            else
+                infoTv.setText(R.string.unknown_ip_port);
+        }
+        else {
+            startBut.setText(R.string.but_start);
+            infoTv.setText(R.string.node_not_running);
+        }
+    }
+
+    private Button startBut;
+    private TextView infoTv;
 }

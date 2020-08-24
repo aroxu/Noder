@@ -90,3 +90,6 @@ app/.cxx
 
 # node lib
 app/src/main/cpp/libnode
+
+# node project files
+app/src/main/assets/nodejs-on-android

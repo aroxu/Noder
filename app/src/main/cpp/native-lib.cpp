@@ -1,53 +1,86 @@
-#include <jni.h>
-#include <string>
-#include <cstdlib>
-#include "node.h"
+#include "native-lib.h"
+#include <thread>
+#include <vector>
+#include <node.h>
+#include <unistd.h>
 
-//node's libUV requires all arguments being on contiguous memory.
-extern "C" jobject JNICALL
-Java_me_b1ackange1_noder_MainActivity_startNodeWithArguments(
-        JNIEnv *env,
-        jobject /* this */,
-        jobjectArray arguments) {
+extern "C" void Java_me_b1ackange1_noder_StarterService_startNode(JNIEnv *env, jobject instance, jobjectArray args)
+{
+    // Make node's console.log work with Android logging system
+    noder::enableLogging();
 
-    //argc
-    jsize argument_count = env->GetArrayLength(arguments);
+    // Prepare fake argv commandline arguments
+    auto continuousArray = noder::makeContinuousArray(env, args);
+    auto argv = noder::getArgv(continuousArray);
 
-    //Compute byte size need for all arguments in contiguous memory.
-    int c_arguments_size = 0;
-    for (int i = 0; i < argument_count ; i++) {
-        c_arguments_size += strlen(env->GetStringUTFChars((jstring)env->GetObjectArrayElement(arguments, i), 0));
-        c_arguments_size++; // for '\0'
-    }
-
-    //Stores arguments in contiguous memory.
-    char* args_buffer = (char*) calloc(c_arguments_size, sizeof(char));
-
-    //argv to pass into node.
-    char* argv[argument_count];
-
-    //To iterate through the expected start position of each argument in args_buffer.
-    char* current_args_position = args_buffer;
-
-    //Populate the args_buffer and argv.
-    for (int i = 0; i < argument_count ; i++)
-    {
-        const char* current_argument = env->GetStringUTFChars((jstring)env->GetObjectArrayElement(arguments, i), 0);
-
-        //Copy current argument to its expected position in args_buffer
-        strncpy(current_args_position, current_argument, strlen(current_argument));
-
-        //Save current argument start position in argv
-        argv[i] = current_args_position;
-
-        //Increment to the next argument's expected position.
-        current_args_position += strlen(current_args_position) + 1;
-    }
-
-    //Start node, with argc and argv.
-    int node_result = node::Start(argument_count, argv);
-    free(args_buffer);
-
-    return jobject(node_result);
-
+    node::Start(argv.size() - 1, argv.data());
 }
+
+namespace noder {
+    namespace {
+        std::thread  logger;
+        static int pfd[2];
+    }
+
+    void enableLogging()
+    {
+        redirectStreamsToPipe();
+        startLoggingFromPipe();
+    }
+
+    void redirectStreamsToPipe()
+    {
+        setvbuf(stdout, 0, _IOLBF, 0);
+        setvbuf(stderr, 0, _IONBF, 0);
+
+        pipe(pfd);
+        dup2(pfd[1], 1);
+        dup2(pfd[1], 2);
+    }
+
+    void startLoggingFromPipe()
+    {
+        logger = std::thread([](int* pipefd){
+            char buf[128];
+            std::size_t nBytes = 0;
+            while((nBytes = read(pfd[0], buf, sizeof buf - 1)) > 0) {
+                if(buf[nBytes - 1] == '\n') --nBytes;
+                buf[nBytes] = 0;
+                LOGD("%s", buf);
+            }
+        }, pfd);
+
+        logger.detach();
+    }
+
+    std::vector<char> makeContinuousArray(JNIEnv *env, jobjectArray fromArgs)
+    {
+        int count = env->GetArrayLength(fromArgs);
+        std::vector<char> buffer;
+        for (int i = 0; i < count; i++)
+        {
+            jstring str = (jstring)env->GetObjectArrayElement(fromArgs, i);
+            const char* sptr = env->GetStringUTFChars(str, 0);
+
+            do {
+                buffer.push_back(*sptr);
+            }
+            while(*sptr++ != '\0');
+        }
+
+        return buffer;
+    }
+
+    std::vector<char*> getArgv(std::vector<char>& fromContinuousArray)
+    {
+        std::vector<char*> argv;
+
+        argv.push_back(fromContinuousArray.data());
+        for (int i = 0; i < fromContinuousArray.size() - 1; i++)
+            if (fromContinuousArray[i] == '\0') argv.push_back(&fromContinuousArray[i+1]);
+
+        argv.push_back(nullptr);
+
+        return argv;
+    }
+} // namespace noder
